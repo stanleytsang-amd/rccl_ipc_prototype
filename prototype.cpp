@@ -62,6 +62,18 @@ int main(int argc, char *argv[]) {
    hipIpcMemHandle_t gpuHandles[2];   
    hipIpcMemHandle_t recvHandles[NUM_HANDLES_TOTAL];
 
+   // HIP-related setup
+   size_t gpuDataSize = numElements * sizeof(int);      
+   
+   int* hostData;
+   hostData = new int[numElements];
+
+   HIPCHECK(hipSetDevice(rank % 4));
+   HIPCHECK(hipMalloc(&devPtrs[0], gpuDataSize));
+   HIPCHECK(hipMalloc(&devPtrs[1], gpuDataSize));
+
+   int* otherDevPtr[NUM_HANDLES_TOTAL];
+   
    // Rank 0 creates shared memory region
    if (rank == 0)
    {
@@ -84,20 +96,6 @@ int main(int argc, char *argv[]) {
    }
 
    // Ensure all ranks have opened shared memory before proceeding
-   MPI_Barrier(MPI_COMM_WORLD);
-
-   // HIP-related setup
-   size_t gpuDataSize = numElements * sizeof(int);      
-   
-   int* hostData;
-   hostData = new int[numElements];
-
-   HIPCHECK(hipSetDevice(rank % 4));
-   HIPCHECK(hipMalloc(&devPtrs[0], gpuDataSize));
-   HIPCHECK(hipMalloc(&devPtrs[1], gpuDataSize));
-
-   int* otherDevPtr[NUM_HANDLES_TOTAL];
-
    MPI_Barrier(MPI_COMM_WORLD);
 
    std::cout << std::setprecision(7) << std::fixed;
