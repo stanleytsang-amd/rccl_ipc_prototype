@@ -1,5 +1,6 @@
 #include <mpi.h>
 #include <omp.h>
+#include <iomanip>
 #include <iostream>
 #include <fcntl.h> 
 #include <sys/shm.h> 
@@ -99,6 +100,7 @@ int main(int argc, char *argv[]) {
 
    MPI_Barrier(MPI_COMM_WORLD);
 
+   std::cout << std::setprecision(7) << std::fixed;
    double averageTime;   
    for(int iteration = 0; iteration < iterations; iteration++)
    {
@@ -145,6 +147,7 @@ int main(int argc, char *argv[]) {
       else
       {
          start = omp_get_wtime();
+
          for (int i = 0; i < NUM_HANDLES_TOTAL; i++)
          {
             HIPCHECK(hipIpcOpenMemHandle((void**)&otherDevPtr[i], recvHandles[i], hipIpcMemLazyEnablePeerAccess));
