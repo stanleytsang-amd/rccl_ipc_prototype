@@ -52,7 +52,7 @@ int main(int argc, char *argv[]) {
 
    // Cache stuff
    SendCache sendCache;
-   RecvCache recvCache;
+   RecvCache recvCache(100, HandleHash, HandleEqual);
 
    size_t idx = rank * 2;
    int targetRank = (rank == numRanks - 1) ? 0 : rank + 1;
@@ -107,7 +107,7 @@ int main(int argc, char *argv[]) {
       {
          start = omp_get_wtime();
          gpuHandles[0] = CheckCacheForPtr((void*)devPtrs[0], sendCache);
-         gpuHandles[1] = CheckCacheForPtr((void*)devPtrs[0], sendCache);
+         gpuHandles[1] = CheckCacheForPtr((void*)devPtrs[1], sendCache);
          end = omp_get_wtime();
       }
       else
@@ -137,7 +137,7 @@ int main(int argc, char *argv[]) {
       {
          start = omp_get_wtime();
          for (int i = 0; i < NUM_HANDLES_TOTAL; i++)
-         {
+         {         
             otherDevPtr[i] = (int*)CheckCacheForHandle(recvHandles[i], recvCache);
          }
          end = omp_get_wtime();        
@@ -147,7 +147,7 @@ int main(int argc, char *argv[]) {
          start = omp_get_wtime();
 
          for (int i = 0; i < NUM_HANDLES_TOTAL; i++)
-         {
+         {     
             HIPCHECK(hipIpcOpenMemHandle((void**)&otherDevPtr[i], recvHandles[i], hipIpcMemLazyEnablePeerAccess));
          }
          end = omp_get_wtime();   
@@ -165,18 +165,20 @@ int main(int argc, char *argv[]) {
       dim3 grid = { 1, 1, 1 };
       dim3 block = { numElements, 1, 1 };
       hipLaunchKernelGGL((setData), grid, block, 0, 0, otherDevPtr[targetRank * 2], rank, numElements);   
-
+      hipLaunchKernelGGL((setData), grid, block, 0, 0, otherDevPtr[(targetRank * 2)+1], rank, numElements); 
       // Ensure all ranks' kernels have completed before checking data
       HIPCHECK(hipDeviceSynchronize());
       MPI_Barrier(MPI_COMM_WORLD);
    }
 
    // Check data
+   int checkRank = (rank == 0) ? numRanks - 1 : rank - 1;   
+
    HIPCHECK(hipMemcpy(hostData, devPtrs[0], gpuDataSize, hipMemcpyDeviceToHost));
- 
-   int checkRank = (rank == 0) ? numRanks - 1 : rank - 1;
    CheckData(hostData, rank, checkRank, numElements);
 
+   HIPCHECK(hipMemcpy(hostData, devPtrs[1], gpuDataSize, hipMemcpyDeviceToHost));
+   CheckData(hostData, rank, checkRank, numElements);
    MPI_Barrier(MPI_COMM_WORLD);
 
    if (rank == 0)
@@ -190,7 +192,7 @@ int main(int argc, char *argv[]) {
    {
       if (useCache)
       {
-         //HIPCHECK(hipIpcCloseMemHandle((void*)otherDevPtr[i]));
+         HIPCHECK(hipIpcCloseMemHandle((void*)otherDevPtr[i]));
       }
       else
       {
@@ -229,7 +231,6 @@ void SyncAndPrintElapsedTimeV2(double start, double end, int rank, const char* t
    double elapsedTime = end - start;
    double reducedTime;
    MPI_Barrier(MPI_COMM_WORLD);
-   //MPI_Reduce(&start, &globalStart, 1, MPI_DOUBLE, MPI_MIN, 0, MPI_COMM_WORLD);
    MPI_Reduce(&elapsedTime, &reducedTime, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);   
 
    if (rank == 0)
