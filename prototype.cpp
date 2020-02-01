@@ -51,8 +51,10 @@ int main(int argc, char *argv[]) {
    hipIpcMemHandle_t* shmemHandles;
 
    // Cache stuff
-   SendCache sendCache;
-   RecvCache recvCache(100, HandleHash, HandleEqual);
+   //SendCache sendCache;
+   //RecvCache recvCache(100, HandleHash, HandleEqual);
+   SendCache sendCache(1600);
+   RecvCache recvCache(1600, 100, HandleHash, HandleEqual);
 
    size_t idx = rank * 2;
    int targetRank = (rank == numRanks - 1) ? 0 : rank + 1;
@@ -106,8 +108,8 @@ int main(int argc, char *argv[]) {
       if (useCache)
       {
          start = omp_get_wtime();
-         gpuHandles[0] = CheckCacheForPtr((void*)devPtrs[0], sendCache);
-         gpuHandles[1] = CheckCacheForPtr((void*)devPtrs[1], sendCache);
+         gpuHandles[0] = CheckCacheForPtr((void*)devPtrs[0], sendCache, rank);
+         gpuHandles[1] = CheckCacheForPtr((void*)devPtrs[1], sendCache, rank);
          end = omp_get_wtime();
       }
       else
@@ -117,6 +119,7 @@ int main(int argc, char *argv[]) {
          HIPCHECK(hipIpcGetMemHandle(&gpuHandles[1], devPtrs[1]));   
          end = omp_get_wtime();
       }
+      
       SyncAndPrintElapsedTime(start, end, globalStart, globalEnd, rank, "getting handles", elapsedTime);
       //SyncAndPrintElapsedTimeV2(start, end, rank, "getting handles", elapsedTime);
 
