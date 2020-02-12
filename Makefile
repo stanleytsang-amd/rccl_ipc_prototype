@@ -3,7 +3,7 @@ MPI_PATH?= $(wildcard /home/WORKSPACE/statsang/ompi)
 
 HIPCC=$(HIP_PATH)/bin/hipcc
 CXX=$(HIPCC)
-CXXFLAGS=-I$(MPI_PATH)/include -L$(MPI_PATH)/lib -lomp -lmpi -lrt -Ofast
+CXXFLAGS=-I$(MPI_PATH)/include -L$(MPI_PATH)/lib -lomp -lmpi -lrt -pthread -Ofast
 
 PROTOTYPE = prototype
 ALL = $(PROTOTYPE)

@@ -9,7 +9,9 @@
 #include <sys/mman.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <time.h> 
 
+#include "barrier.h"
 #include "common.h"
 #include "cache.h"
 
@@ -21,15 +23,17 @@ void CheckData(int* hostData, int rank, int checkRank, unsigned int numElements)
 
 // TODO: Not use MPI since MPI is not an option in RCCL
 int main(int argc, char *argv[]) {
-   int useCache, iterations;
+   int useCache, iterations, cacheSize;
 
-   if (argc < 3)
+   if (argc < 4)
    {
-      std::cout << "Please specify 0 for no cache, 1 for cache; then specify number of iterations." << std::endl;
+      std::cout << "Please specify 0 for no cache, 1 for cache; then specify number of iterations; then specify number of elements in cache." << std::endl;
       return 1;
    }
    useCache = std::atoi(argv[1]);   
    iterations = std::atoi(argv[2]); 
+   
+   cacheSize = std::atoi(argv[3]);
 
    // Initial MPI setup
    MPI_Init(NULL, NULL);
@@ -46,15 +50,14 @@ int main(int argc, char *argv[]) {
    double start, end, globalStart, globalEnd;   
 
    // Shared memory stuff
-   const size_t smSize = numRanks * 2 * sizeof(hipIpcMemHandle_t);
-   int shm_fd; 
+   const size_t smHandlesSize = numRanks * 2 * sizeof(hipIpcMemHandle_t);
+   const  size_t smBarrierSize = sizeof(SMBarrier);  
+   int shm_fd_handles; 
    hipIpcMemHandle_t* shmemHandles;
 
    // Cache stuff
-   //SendCache sendCache;
-   //RecvCache recvCache(100, HandleHash, HandleEqual);
-   SendCache sendCache(1600);
-   RecvCache recvCache(1600, 100, HandleHash, HandleEqual);
+   SendCache sendCache(cacheSize);
+   RecvCache recvCache(cacheSize, 100, HandleHash, HandleEqual);
 
    size_t idx = rank * 2;
    int targetRank = (rank == numRanks - 1) ? 0 : rank + 1;
@@ -76,31 +79,39 @@ int main(int argc, char *argv[]) {
 
    int* otherDevPtr[NUM_HANDLES_TOTAL];
    
-   // Rank 0 creates shared memory region
+   // Rank 0 creates shared memory regions - one for storing handles, one for storing shared barrier
    if (rank == 0)
    {
-      shm_fd = shm_open(smName, O_CREAT | O_RDWR, 0666);
-      ftruncate(shm_fd, smSize);
+      shm_fd_handles = shm_open(smHandlesName, O_CREAT | O_RDWR, 0666);
+      ftruncate(shm_fd_handles, smHandlesSize);
 
       int protection = PROT_READ | PROT_WRITE;
       int visibility = MAP_SHARED;
-
-      shmemHandles = (hipIpcMemHandle_t*) mmap(NULL, smSize, protection, visibility, shm_fd, 0);
+   
+      shmemHandles = (hipIpcMemHandle_t*) mmap(NULL, smHandlesSize, protection, visibility, shm_fd_handles, 0);
    }
-
-   MPI_Barrier(MPI_COMM_WORLD);
 
    // Other ranks open shared memory object created by rank 0
    if (rank != 0)
    {
-      shm_fd = shm_open(smName, O_RDWR, 0666); 
-      shmemHandles = (hipIpcMemHandle_t*)mmap(0, smSize, PROT_WRITE, MAP_SHARED, shm_fd, 0);      
+      do
+      {
+         shm_fd_handles = shm_open(smHandlesName, O_RDWR, 0666); 
+      } while (shm_fd_handles == -1);
+      shmemHandles = (hipIpcMemHandle_t*)mmap(0, smHandlesSize, PROT_WRITE, MAP_SHARED, shm_fd_handles, 0);         
    }
 
-   // Ensure all ranks have opened shared memory before proceeding
-   MPI_Barrier(MPI_COMM_WORLD);
+   srand (time(NULL));
+   int ncclUniqueId = rand() % 32767;
 
-   std::cout << std::setprecision(7) << std::fixed;
+   // Initialize Barrier first
+   SMBarrier shmemBarrier(rank, numRanks, ncclUniqueId);
+   //MPI_Barrier(MPI_COMM_WORLD);
+   
+   // Ensure all ranks have opened shared memory before proceeding
+   shmemBarrier.wait();
+
+   //std::cout << std::setprecision(7) << std::fixed;
    double averageTime;   
    for(int iteration = 0; iteration < iterations; iteration++)
    {
@@ -132,7 +143,7 @@ int main(int argc, char *argv[]) {
       //MPI_Barrier(MPI_COMM_WORLD);
       // Receive all handles from memory
       start = omp_get_wtime();
-      memcpy(recvHandles, shmemHandles, smSize);
+      memcpy(recvHandles, shmemHandles, smHandlesSize);
       end = omp_get_wtime();   
       SyncAndPrintElapsedTime(start, end, globalStart, globalEnd, rank, "reading from shared memory twice", elapsedTime);
 
@@ -171,7 +182,7 @@ int main(int argc, char *argv[]) {
       hipLaunchKernelGGL((setData), grid, block, 0, 0, otherDevPtr[(targetRank * 2)+1], rank, numElements); 
       // Ensure all ranks' kernels have completed before checking data
       HIPCHECK(hipDeviceSynchronize());
-      MPI_Barrier(MPI_COMM_WORLD);
+      shmemBarrier.wait();
    }
 
    // Check data
@@ -181,14 +192,14 @@ int main(int argc, char *argv[]) {
    CheckData(hostData, rank, checkRank, numElements);
 
    HIPCHECK(hipMemcpy(hostData, devPtrs[1], gpuDataSize, hipMemcpyDeviceToHost));
-   CheckData(hostData, rank, checkRank, numElements);
-   MPI_Barrier(MPI_COMM_WORLD);
+   CheckData(hostData, rank, checkRank, numElements); 
+   shmemBarrier.wait();
 
    if (rank == 0)
    {
       averageTime /= (double)iterations;
       std::cout << "Average time required for measured operations (" << iterations << " iterations): " << averageTime << " seconds" << std::endl;
-      munmap((void*)shmemHandles, smSize);
+      munmap((void*)shmemHandles, smHandlesSize);
    }
 
    for (int i = 0; i < NUM_HANDLES_TOTAL; i++)
@@ -203,11 +214,11 @@ int main(int argc, char *argv[]) {
       }
    }
 
-   MPI_Barrier(MPI_COMM_WORLD);
+   shmemBarrier.wait();
 
    HIPCHECK(hipFree(devPtrs[0]));   
    HIPCHECK(hipFree(devPtrs[1]));  
-   shm_unlink(smName);
+   shm_unlink(smHandlesName);
    
    delete hostData;
 

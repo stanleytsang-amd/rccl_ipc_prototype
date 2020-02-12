@@ -24,7 +24,7 @@ __global__ void setData(int* data, int targetRank, size_t N)
 
 static unsigned int numElements = 1024;
 
-const char* smName = "prototype";
+const char* smHandlesName = "prototype";
 
 const int NUM_HANDLES_TOTAL = NUM_PROCS * 2;
 
